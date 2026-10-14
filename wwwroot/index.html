@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>我的全端小專案</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        li { margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <h1>📋 任務清單系統</h1>
+    <!-- 新增：搜尋區塊 -->
+    <div style="margin-bottom: 20px; display: flex; gap: 10px;">
+        <input type="text" id="searchInput" placeholder="🔍 輸入關鍵字搜尋標題或內容..." style="flex: 1; padding: 10px; border-radius: 5px; border: 1px solid #ccc;">
+        <button onclick="doSearch()" style="padding: 10px 20px; background: #4f46e5; color: white; border: none; border-radius: 5px; cursor: pointer;">搜尋</button>
+        <button onclick="clearSearch()" style="padding: 10px 20px; background: #999; color: white; border: none; border-radius: 5px; cursor: pointer;">清除</button>
+    </div>
+    <!-- 新增區塊 -->
+    <div style="background: #f4f4f4; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+    <h3>📝 新增備忘錄</h3>
+    <input type="text" id="taskInput" placeholder="標題..." style="width: 100%; margin-bottom: 10px;"><br>
+    <!-- 新增：多行內容輸入框 -->
+    <textarea id="taskContent" placeholder="詳細內容..." rows="3" style="width: 100%; margin-bottom: 10px;"></textarea><br>
+    <!-- 新增：日期時間選擇器 -->
+    預定時間：<input type="datetime-local" id="taskDate" style="margin-bottom: 10px;"><br>
+    圖片上傳：<input type="file" id="taskImage" accept="image/*" multiple style="margin-bottom: 10px;"><br>
+    <button onclick="addTask()" style="padding: 5px 15px;">儲存</button>
+    </div>
+
+    <style>
+        .memo-card {
+        border: 1px solid #ccc;
+        border-radius: 8px;
+        padding: 15px;
+        margin-bottom: 15px;
+        background-color: #fff9e6; /* 備忘錄常用的便利貼黃色 */
+        }
+        .memo-time { color: #d9534f; font-size: 0.9em; font-weight: bold; }
+    </style>
+
+    <!-- 列表區塊 -->
+    <ul id="taskList" style="max-height: 500px; overflow-y: auto; padding-right: 10px; border: 1px solid #ddd; border-radius: 8px; padding: 15px; background-color: #f9f9f9;">
+        <!-- JavaScript 會把資料倒進這裡 -->
+    </ul>
+
+    <script>
+        // 網址就是我們自己的 API，因為網頁跟 API 在同一個伺服器
+        const apiUrl = '/api/UserTasks';
+        
+        function setTaskDateToNow() {
+            const now = new Date();
+            // 扣除時差，轉換為本地時間格式
+            now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+            // 切割字串，變成 datetime-local 能讀懂的格式 (YYYY-MM-DDThh:mm)
+            document.getElementById('taskDate').value = now.toISOString().slice(0, 16);
+        }
+
+        // 1. 查詢資料 (GET)
+        async function loadTasks(focusId = null, searchKeyword = "") {
+            const fetchUrl = searchKeyword ? `${apiUrl}?keyword=${encodeURIComponent(searchKeyword)}` : apiUrl;
+            const response = await fetch(fetchUrl);
+            const tasks = await response.json();
+            const list = document.getElementById('taskList');
+            list.innerHTML = '';
+            let htmlContent = ''; 
+            let currentGroupDate = "";
+            // 改為輸出備忘錄「卡片」設計
+            tasks.forEach(task => {
+                const isChecked = task.isCompleted ? "checked" : "";
+                const textStyle = task.isCompleted ? "text-decoration: line-through; opacity: 0.6;" : "";
+                
+                // 處理時間顯示格式
+                let timeHtml = "";
+                let dateInputVal = ""; // 給編輯輸入框用的時間格式
+                let taskDateKey = "📌 無期限";
+                let imageHtml = "";
+                if (task.imageUrl) {
+                    // 用逗號把字串切成陣列
+                    const urls = task.imageUrl.split(',');
+                    
+                    // 用 flex 容器讓多張圖片漂亮地並排
+                    imageHtml = `<div style="display: flex; flex-wrap: wrap; gap: 10px; margin: 10px 0;">`;
+                    urls.forEach(url => {
+                        if(url.trim() !== "") {
+                            // 將圖片縮小成正方形縮圖 (object-fit: cover 確保圖片不變形)
+                            imageHtml += `<img src="${url}" onclick="openLightbox('${url}')" title="點擊放大預覽" style="width: 120px; height: 120px; object-fit: cover; border-radius: 8px; cursor: pointer; transition: transform 0.2s;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">`;
+                        }
+                    });
+                    imageHtml += `</div>`;
+                }
+                if (task.targetDate) {
+                    // 1. 從 C# 拿到的時間，強制補上 'Z' 讓瀏覽器知道這是 UTC 國際標準時間
+                    let dateStr = task.targetDate;
+                    if (!dateStr.endsWith('Z')) dateStr += 'Z';
+                    
+                    const dateObj = new Date(dateStr);
+                    timeHtml = `<div class="memo-time">⏰ 時間：${dateObj.toLocaleString('zh-TW')}</div>`;
+                    
+                    // 2. 🌟 關鍵修正：扣除時差後再轉 ISOString，這樣編輯框才會顯示正確的台灣時間！
+                    const localTime = new Date(dateObj.getTime() - (dateObj.getTimezoneOffset() * 60000));
+                    dateInputVal = localTime.toISOString().slice(0, 16); 
+                    
+                    taskDateKey = `📅 ${dateObj.getFullYear()}年${dateObj.getMonth() + 1}月${dateObj.getDate()}日`;
+                }
+
+                if (taskDateKey !== currentGroupDate) {
+                    if (currentGroupDate !== "") {
+                        htmlContent += `</div></details>`;
+                    }
+                    htmlContent += `
+                        <details style="margin-bottom: 15px; border: 1px solid #c7d2fe; border-radius: 8px; background: #f8fafc;">
+                            <summary style="background-color: #e0e7ff; padding: 10px 15px; cursor: pointer; font-weight: bold; color: #3730a3; outline: none; user-select: none; border-radius: 8px;">
+                                ${taskDateKey}
+                            </summary>
+                            <div style="padding: 15px 15px 0 15px;">
+                    `;
+                    currentGroupDate = taskDateKey; // 更新目前群組
+                }
+
+                // 為了在字串裡塞入這些值，記得用反引號 ` 和跳脫字元避免單引號衝突
+                // (注意這裡我們也要把 content 和 targetDate 傳進 updateTask)
+                htmlContent += `
+                    <div class="memo-card" style="${textStyle}">
+                        <div id="view-${task.id}">
+                            <input type="checkbox" ${isChecked} onchange="updateStatus(${task.id}, this.checked)">
+                            <strong style="font-size: 1.2em;">${task.title}</strong>
+                            ${imageHtml}
+                            ${timeHtml}
+                            <p style="white-space: pre-wrap; margin: 10px 0;">${task.content || '無詳細內容'}</p>
+                            <button onclick="document.getElementById('view-${task.id}').style.display='none'; document.getElementById('edit-${task.id}').style.display='block';">✏ 編輯</button>
+                            <button onclick="deleteTask(${task.id})">🗑️ 刪除</button>
+                        </div>
+                        
+                        <div id="edit-${task.id}" style="display: none; background: #fff; padding: 10px; border-radius: 5px; border: 1px dashed #ccc;">
+                            <input type="text" id="edit-title-${task.id}" value="${task.title}" style="width: 100%; margin-bottom: 5px;">
+                            <textarea id="edit-content-${task.id}" rows="3" style="width: 100%; margin-bottom: 5px;">${task.content || ''}</textarea>
+                            
+                            <input type="datetime-local" id="edit-date-${task.id}" value="${dateInputVal}" style="margin-bottom: 10px;"><br>
+                            <div style="margin-bottom: 10px; padding: 10px; background: #f9f9f9; border-radius: 5px;">
+                                更換圖片：<input type="file" id="edit-image-${task.id}" accept="image/*" multiple style="margin-bottom: 5px;"><br>
+                                <label style="color: #d9534f; cursor: pointer;">
+                                    <input type="checkbox" id="edit-remove-image-${task.id}"> 🗑️ 刪除原有圖片
+                                </label>
+                            </div>
+                            
+                            <button onclick="saveEdit(${task.id}, '${task.imageUrl || ''}')" style="background: #5cb85c; color: white; border: none; padding: 5px 15px;">💾 儲存</button>
+                            <button onclick="document.getElementById('view-${task.id}').style.display='block'; document.getElementById('edit-${task.id}').style.display='none';">❌ 取消</button>
+                        </div>
+                    </div>`;
+            });
+            if (currentGroupDate !== "") {
+                htmlContent += `</div></details>`;
+            }
+            list.innerHTML = htmlContent;
+        }
+        // 新增搜尋按鈕的觸發函數
+        function doSearch() {
+            const kw = document.getElementById('searchInput').value;
+            loadTasks(null, kw);
+        }
+        function clearSearch() {
+            document.getElementById('searchInput').value = '';
+            loadTasks();
+        }
+
+        // 2. 新增資料 (POST)
+        async function addTask() {
+            // 抓取畫面上三個輸入框的值
+            const inputTitle = document.getElementById('taskInput').value;
+            const inputContent = document.getElementById('taskContent').value;
+            const inputDate = document.getElementById('taskDate').value;
+
+            let uploadedImageUrl = null;
+            const fileInput = document.getElementById('taskImage');
+            let finalDate = null;
+            if (inputDate) {
+                finalDate = new Date(inputDate).toISOString();
+            }
+            if (fileInput.files.length > 0) {
+                const formData = new FormData();
+                // formData.append("file", fileInput.files[0]); // 把檔案打包
+                for (let i = 0; i < fileInput.files.length; i++) {
+                    formData.append("files", fileInput.files[i]); // 注意這裡的 key 必須叫 "files"，對應 C# 參數
+                }
+                // 先把圖片送到 Upload API
+                const uploadRes = await fetch('/api/Upload', {
+                    method: 'POST',
+                    body: formData // 傳送檔案不需要設定 Content-Type，瀏覽器會自動處理
+                });
+                const uploadData = await uploadRes.json();
+                uploadedImageUrl = uploadData.imageUrls.join(','); // 拿到後端回傳的 /uploads/xxxx.jpg
+            }
+            
+            const newTask = { 
+                title: inputTitle, 
+                content: inputContent,          // 寫入詳細內容
+                targetDate: finalDate || null,  // 如果沒填時間，送出 null
+                isCompleted: false, 
+                imageUrl: uploadedImageUrl 
+            
+            };
+
+            await fetch(apiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(newTask)
+            });
+
+            // 清空輸入框
+            document.getElementById('taskInput').value = '';
+            document.getElementById('taskContent').value = '';
+            document.getElementById('taskDate').value = '';
+            document.getElementById('taskImage').value = '';
+            setTaskDateToNow();
+            loadTasks();
+        }
+
+        // 3. 刪除資料 (DELETE)
+        async function deleteTask(id) {
+            const isConfirmed = confirm("確定要刪除嗎？");
+            // 呼叫 API 執行 DELETE
+            if (isConfirmed) {
+                await fetch(`${apiUrl}/${id}`, { method: 'DELETE' });
+                const currentKeyword = document.getElementById('searchInput').value;
+                loadTasks(); // 重新讀取清單更新畫面
+            }
+        }
+
+        // 4. 修改資料 (PUT)
+        async function updateTask(id,  newStatus) {
+            const dto = {
+                isCompleted: newStatus
+            };
+
+            await fetch(`${apiUrl}/${id}/status`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(dto)
+            });
+            loadTasks();
+        }
+        async function saveEdit(id, oldImageUrl) {
+            // 抓取編輯框裡面的新值
+            const newTitle = document.getElementById(`edit-title-${id}`).value;
+            const newContent = document.getElementById(`edit-content-${id}`).value;
+            const newDate = document.getElementById(`edit-date-${id}`).value;
+            let finalEditDate = null;
+            if (newDate) {
+                finalEditDate = new Date(newDate).toISOString();
+            }
+
+            const removeImgChecked = document.getElementById(`edit-remove-image-${id}`).checked;
+            const fileInput = document.getElementById(`edit-image-${id}`);
+            
+            let finalImageUrl = oldImageUrl; // 預設保留原本的圖片
+
+            if (removeImgChecked) {
+                finalImageUrl = null;
+            }
+            else if (fileInput.files.length > 0) {
+                const formData = new FormData();
+                for (let i = 0; i < fileInput.files.length; i++) {
+                    formData.append("files", fileInput.files[i]);
+                }
+
+                const uploadRes = await fetch('/api/Upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                const uploadData = await uploadRes.json();
+                const newUrls = uploadData.imageUrls.join(',');
+                if (finalImageUrl && !removeImgChecked) {
+                    finalImageUrl += ',' + newUrls;
+                } else {
+                    finalImageUrl = newUrls;
+                }
+            }
+            const updateDto = {
+                title: newTitle,
+                content: newContent,
+                targetDate: finalEditDate,
+                imageUrl: finalImageUrl
+            };
+
+            await fetch(`${apiUrl}/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(updateDto)
+            });
+            const currentKeyword = document.getElementById('searchInput').value;
+            loadTasks(id, currentKeyword); // 重新讀取畫面
+        }
+        // 網頁一打開就立刻執行讀取
+        setTaskDateToNow();
+        loadTasks();
+        // 🌟 打開 Lightbox
+        function openLightbox(imageSrc) {
+            // 1. 把大圖的 src 換成使用者點擊的那張圖片網址
+            document.getElementById('lightboxImage').src = imageSrc;
+            // 2. 把隱藏的黑畫面改為顯示 (因為我們有用 Flexbox 置中，所以設為 flex)
+            document.getElementById('lightboxOverlay').style.display = 'flex';
+        }
+
+        // 🌟 關閉 Lightbox
+        function closeLightbox() {
+            // 1. 隱藏黑畫面
+            document.getElementById('lightboxOverlay').style.display = 'none';
+            // 2. 清空大圖 src，避免下次打開其他圖時看到上一張圖的殘影
+            document.getElementById('lightboxImage').src = ''; 
+        }
+    </script>
+    <!-- 🌟 圖片放大預覽 (Lightbox) 區塊：預設隱藏 (display: none) -->
+    <!-- 設定 fixed 讓它蓋滿整個螢幕，z-index: 1000 確保它在最上層 -->
+    <!-- 點擊這個黑畫面任何地方，就會呼叫 closeLightbox() 關閉 -->
+    <div id="lightboxOverlay" onclick="closeLightbox()" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 1000; justify-content: center; align-items: center; flex-direction: column;">
+        
+        <!-- 右上角的關閉打叉按鈕 -->
+        <span style="position: absolute; top: 20px; right: 30px; color: white; font-size: 40px; cursor: pointer; font-weight: bold;">&times;</span>
+        
+        <!-- 顯示放大圖片的本體 -->
+        <img id="lightboxImage" src="" style="max-width: 90%; max-height: 90%; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.5);">
+    </div>
+</body>
+</html>
